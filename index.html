@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111110">
+<title>플랭크 카메라</title>
+<style>
+  :root{--bg:#111110;--card:#1c1b19;--ink:#f1efe8;--mute:#9a978d;--line:#2f2d29;--acc:#5fc39f;--warn:#ea7a5c;--wait:#e9c46a}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:-apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;-webkit-tap-highlight-color:transparent;overflow:hidden}
+  .app{display:flex;height:100vh;height:100dvh;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);gap:8px}
+  /* 카메라 */
+  .cam{position:relative;flex:1.25;background:#000;border-radius:14px;overflow:hidden;margin:8px 0 8px 8px}
+  .cam video,.cam canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+  .badge{position:absolute;left:10px;top:10px;padding:6px 12px;border-radius:20px;font-size:14px;font-weight:700;background:rgba(0,0,0,.6);backdrop-filter:blur(4px)}
+  .badge.ok{color:var(--acc)} .badge.wait{color:var(--wait)} .badge.bad{color:var(--warn)}
+  .camstart{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--mute);font-size:14px;text-align:center;padding:16px}
+  .camstart button{background:var(--acc);color:#0b1a14;border:0;border-radius:12px;padding:14px 22px;font-size:17px;font-weight:700}
+  .hold{position:absolute;left:0;bottom:0;height:5px;background:var(--wait);width:0;transition:width .1s linear}
+  /* 오른쪽 패널 */
+  .side{flex:1;display:flex;flex-direction:column;gap:6px;padding:8px 8px 8px 0;min-width:0}
+  .timer{font-variant-numeric:tabular-nums;font-weight:800;font-size:min(30vh,15vw);line-height:1;text-align:center;letter-spacing:-.03em;margin-top:2px}
+  .timer.run{color:var(--acc)}
+  .goalbar{height:5px;background:var(--line);border-radius:3px;overflow:hidden}
+  .goalbar i{display:block;height:100%;width:0;background:var(--acc)}
+  .sub{text-align:center;color:var(--mute);font-size:13px;min-height:16px}
+  .row{display:flex;gap:5px}
+  .chip{flex:1;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:9px;padding:7px 0;font-size:13px}
+  .chip.on{border-color:var(--acc);color:var(--acc);font-weight:700}
+  .btn{flex:1;border:0;border-radius:10px;padding:10px 0;font-size:15px;font-weight:700;background:var(--card);color:var(--ink)}
+  .btn.go{background:var(--acc);color:#0b1a14} .btn.stop{background:var(--warn);color:#fff}
+  .btn.toggle.on{outline:2px solid var(--acc);color:var(--acc)}
+  .stats{display:flex;gap:5px;text-align:center}
+  .stats div{flex:1;background:var(--card);border-radius:10px;padding:6px 0}
+  .stats b{display:block;font-size:20px;font-variant-numeric:tabular-nums}
+  .stats span{font-size:11px;color:var(--mute)}
+  .list{flex:1;overflow-y:auto;background:var(--card);border-radius:10px;padding:6px 10px;font-size:13px;min-height:0}
+  .day-h{display:flex;justify-content:space-between;font-weight:700;padding:4px 0;border-bottom:1px solid var(--line);margin-top:4px}
+  .day-h span{color:var(--mute);font-weight:400}
+  .set{display:flex;justify-content:space-between;padding:3px 0;font-variant-numeric:tabular-nums}
+  .set small{color:var(--mute);margin-left:6px}
+  .del{border:0;background:none;color:var(--mute);font-size:15px;padding:0 4px}
+  .cloud{font-size:11px;color:var(--mute);display:flex;justify-content:space-between;align-items:center}
+  .cloud button{background:none;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:3px 8px;font-size:11px}
+  .toast{position:fixed;left:50%;top:14px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:18px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:9}
+  .toast.show{opacity:1}
+  /* 세로 화면 */
+  @media (orientation:portrait){ .app{flex-direction:column} .cam{flex:1;margin:8px 8px 0} .side{flex:1;padding:0 8px 8px} .timer{font-size:20vw} }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="cam" id="cam">
+    <video id="video" playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <div class="badge wait" id="badge" hidden>준비</div>
+    <div class="hold" id="hold"></div>
+    <div class="camstart" id="camstart">
+      <div>폰을 옆에 세우고, 몸 전체(어깨~발목)가<br>옆모습으로 보이게 해 주세요</div>
+      <button id="camBtn">카메라 켜기</button>
+      <div id="camMsg"></div>
+    </div>
+  </div>
+
+  <div class="side">
+    <div class="timer" id="timer">0:00</div>
+    <div class="goalbar"><i id="bar"></i></div>
+    <div class="sub" id="sub">목표 1:00</div>
+    <div class="row" id="goals">
+      <button class="chip" data-g="0">자유</button>
+      <button class="chip" data-g="30">30초</button>
+      <button class="chip" data-g="60">1분</button>
+      <button class="chip" data-g="90">1:30</button>
+      <button class="chip" data-g="120">2분</button>
+    </div>
+    <div class="row">
+      <button class="btn toggle on" id="autoBtn">자동 인식</button>
+      <button class="btn go" id="mainBtn">시작</button>
+    </div>
+    <div class="stats">
+      <div><b id="sToday">0</b><span>오늘 세트</span></div>
+      <div><b id="sTodayTime">0:00</b><span>오늘 총시간</span></div>
+      <div><b id="sBest">0:00</b><span>최고</span></div>
+    </div>
+    <div class="list" id="list"></div>
+    <div class="cloud"><span id="cloudTxt">이 기기에 저장</span><button id="loginBtn" hidden>Google 로그인</button></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script type="module">
+/* ================================================================
+   ☁️ 클라우드 저장 (선택)
+   Firebase 프로젝트의 웹 앱 설정값을 아래에 붙여 넣으면
+   Google 로그인 후 기록이 클라우드에 저장돼요.
+   비워 두면(null) 이 기기에만 저장돼요.
+   ================================================================ */
+const FIREBASE_CONFIG = null;
+/* 예시:
+const FIREBASE_CONFIG = {
+  apiKey: "...",
+  authDomain: "내프로젝트.firebaseapp.com",
+  projectId: "내프로젝트",
+  appId: "..."
+};
+*/
+
+/* 인식 설정 */
+const HOLD_TO_START = 1.0;  // 자세 유지 몇 초 후 시작
+const BREAK_TO_STOP = 1.5;  // 자세 무너지고 몇 초 후 정지
+const COOLDOWN = 3.0;       // 정지 후 다음 세트 자동 시작까지 대기
+const MIN_SET = 3;          // 이보다 짧으면 기록 안 함
+
+const $ = id => document.getElementById(id);
+const fmt = s => { s = Math.max(0, Math.floor(s)); return Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); };
+const dayKey = ts => { const d=new Date(ts); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); };
+const dayLabel = k => { const [y,m,d]=k.split("-").map(Number); return `${m}/${d} (${"일월화수목금토"[new Date(y,m-1,d).getDay()]})`; };
+const store = { get(k,d){ try{ const v=localStorage.getItem(k); return v===null?d:JSON.parse(v);}catch(e){return d;} }, set(k,v){ try{localStorage.setItem(k,JSON.stringify(v));}catch(e){} } };
+function toast(t){ const el=$("toast"); el.textContent=t; el.classList.add("show"); clearTimeout(toast.t); toast.t=setTimeout(()=>el.classList.remove("show"),1800); }
+
+/* ---------------- 상태 ---------------- */
+let goal = store.get("plankGoal", 60);
+let auto = store.get("plankAuto", true);
+let running = false, startAt = 0, beeped = false, lastStop = 0;
+let okSince = 0, badSince = 0;
+let records = store.get("plankLocal", []);
+let cloud = null; // {add, remove}
+
+/* ---------------- 소리·진동 ---------------- */
+let actx = null;
+function unlockAudio(){ try{ actx = actx || new (window.AudioContext||window.webkitAudioContext)(); actx.resume(); }catch(e){} }
+function beep(f=880,d=.15){
+  try{ unlockAudio(); const o=actx.createOscillator(), g=actx.createGain(); o.frequency.value=f; o.connect(g); g.connect(actx.destination);
+    g.gain.setValueAtTime(.3,actx.currentTime); g.gain.exponentialRampToValueAtTime(.001,actx.currentTime+d); o.start(); o.stop(actx.currentTime+d); }catch(e){}
+  try{ navigator.vibrate && navigator.vibrate(150); }catch(e){}
+}
+
+/* ---------------- 목표·버튼 ---------------- */
+function renderGoal(){
+  document.querySelectorAll("#goals .chip").forEach(c=>c.classList.toggle("on", Number(c.dataset.g)===goal));
+  if (!running) $("sub").textContent = goal ? "목표 "+fmt(goal) : "목표 없음";
+}
+document.querySelectorAll("#goals .chip").forEach(c=>c.onclick=()=>{ if(running) return; goal=Number(c.dataset.g); store.set("plankGoal",goal); renderGoal(); $("bar").style.width="0"; });
+$("autoBtn").onclick=()=>{ auto=!auto; store.set("plankAuto",auto); $("autoBtn").classList.toggle("on",auto); okSince=0; $("hold").style.width="0"; };
+$("autoBtn").classList.toggle("on",auto);
+$("mainBtn").onclick=()=>{ unlockAudio(); running ? stopSet(Date.now()) : startSet(Date.now()); };
+renderGoal();
+
+/* ---------------- 타이머 ---------------- */
+function startSet(t){
+  running=true; startAt=t; beeped=false; badSince=0;
+  $("timer").classList.add("run"); $("mainBtn").textContent="정지"; $("mainBtn").className="btn stop";
+  beep(660,.12);
+}
+function stopSet(endT){
+  running=false; lastStop=Date.now(); okSince=0;
+  $("timer").classList.remove("run"); $("mainBtn").textContent="시작"; $("mainBtn").className="btn go";
+  const sec=Math.floor((endT-startAt)/1000);
+  $("timer").textContent=fmt(sec); renderGoal();
+  if (sec<MIN_SET){ toast(MIN_SET+"초 미만은 기록 안 해요"); return; }
+  beep(440,.25);
+  save({ts:Date.now(), seconds:sec, goal});
+}
+setInterval(()=>{
+  if(!running) return;
+  const el=(Date.now()-startAt)/1000;
+  $("timer").textContent=fmt(el);
+  if(goal){
+    $("bar").style.width=Math.min(100,el/goal*100)+"%";
+    if(!beeped && el>=goal){ beeped=true; beep(988,.15); setTimeout(()=>beep(1318,.3),180); $("sub").textContent="목표 달성! 🎉"; }
+    else if(!beeped) $("sub").textContent="목표 "+fmt(goal)+" · 남은 "+fmt(goal-el+.999);
+  } else $("sub").textContent="";
+},200);
+
+/* ---------------- 기록 ---------------- */
+async function save(rec){
+  if(cloud){ try{ await cloud.add(rec); toast(fmt(rec.seconds)+" 기록 ☁️"); return; }catch(e){ toast("클라우드 저장 실패, 기기에 저장"); } }
+  rec._id="l"+rec.ts; records.unshift(rec); store.set("plankLocal",records); render(); toast(fmt(rec.seconds)+" 기록");
+}
+async function removeRec(id){
+  if(cloud && !id.startsWith("l")){ try{ await cloud.remove(id); }catch(e){ toast("삭제 실패"); } return; }
+  records=records.filter(r=>r._id!==id); store.set("plankLocal",records); render();
+}
+let pendingDel=null;
+function render(){
+  const today=dayKey(Date.now()), t=records.filter(r=>dayKey(r.ts)===today);
+  $("sToday").textContent=t.length;
+  $("sTodayTime").textContent=fmt(t.reduce((a,r)=>a+r.seconds,0));
+  $("sBest").textContent=fmt(records.reduce((a,r)=>Math.max(a,r.seconds),0));
+  if(!records.length){ $("list").innerHTML='<div style="color:var(--mute);text-align:center;padding:10px">아직 기록이 없어요</div>'; return; }
+  const g={}; records.forEach(r=>(g[dayKey(r.ts)] ||= []).push(r));
+  $("list").innerHTML=Object.keys(g).sort().reverse().slice(0,30).map(k=>{
+    const arr=g[k].slice().sort((a,b)=>a.ts-b.ts), tot=arr.reduce((a,r)=>a+r.seconds,0);
+    return `<div class="day-h">${dayLabel(k)}<span>${arr.length}세트 · ${fmt(tot)}</span></div>`+arr.map((r,i)=>{
+      const c=pendingDel===r._id;
+      return `<div class="set"><div>${i+1}세트 <b>${fmt(r.seconds)}</b>${r.goal&&r.seconds>=r.goal?" ✓":""}<small>${new Date(r.ts).toTimeString().slice(0,5)}</small></div><button class="del" data-id="${r._id}" style="${c?"color:var(--warn);font-size:12px":""}">${c?"삭제":"×"}</button></div>`;
+    }).join("");
+  }).join("");
+  $("list").querySelectorAll(".del").forEach(b=>b.onclick=()=>{ const id=b.dataset.id;
+    if(pendingDel===id){ pendingDel=null; removeRec(id); } else { pendingDel=id; render(); setTimeout(()=>{ if(pendingDel===id){pendingDel=null;render();} },3000); } });
+}
+render();
+
+/* ---------------- 화면 꺼짐 방지 ---------------- */
+let wakeLock=null;
+async function keepAwake(){ try{ wakeLock=await navigator.wakeLock?.request("screen"); }catch(e){} }
+document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible" && stream) keepAwake(); });
+
+/* ---------------- 카메라 + 자세 인식 ---------------- */
+let stream=null, landmarker=null, lastVT=-1;
+const video=$("video"), canvas=$("canvas"), ctx=canvas.getContext("2d");
+
+$("camBtn").onclick=async()=>{
+  unlockAudio();
+  $("camBtn").disabled=true; $("camMsg").textContent="카메라 켜는 중…";
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:1280},height:{ideal:720}},audio:false});
+  }catch(e){
+    $("camBtn").disabled=false;
+    $("camMsg").textContent = location.protocol!=="https:" && location.hostname!=="localhost"
+      ? "카메라는 https 주소에서만 켜져요" : "카메라 권한을 허용해 주세요";
+    return;
+  }
+  video.srcObject=stream; await video.play();
+  keepAwake();
+  $("camMsg").textContent="자세 인식 모델 불러오는 중…";
+  try{
+    const vision=await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14");
+    const files=await vision.FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    const opts=d=>({baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",delegate:d},runningMode:"VIDEO",numPoses:1});
+    try{ landmarker=await vision.PoseLandmarker.createFromOptions(files,opts("GPU")); }
+    catch(e){ landmarker=await vision.PoseLandmarker.createFromOptions(files,opts("CPU")); }
+  }catch(e){
+    $("camMsg").textContent="인식 모델을 못 불러왔어요 (인터넷 확인). 수동 버튼은 쓸 수 있어요";
+    $("camstart").style.background="rgba(0,0,0,.5)"; setTimeout(()=>$("camstart").hidden=true,2500); return;
+  }
+  $("camstart").hidden=true; $("badge").hidden=false;
+  requestAnimationFrame(loop);
+};
+
+const ang=(ax,ay,bx,by,cx,cy)=>{ // b에서의 각도
+  const v1x=ax-bx,v1y=ay-by,v2x=cx-bx,v2y=cy-by;
+  const c=(v1x*v2x+v1y*v2y)/(Math.hypot(v1x,v1y)*Math.hypot(v2x,v2y)||1);
+  return Math.acos(Math.max(-1,Math.min(1,c)))*180/Math.PI;
+};
+
+// 옆모습 플랭크 판정
+function judge(lm){
+  const W=video.videoWidth, H=video.videoHeight;
+  const P=i=>({x:lm[i].x*W, y:lm[i].y*H, v:lm[i].visibility??1});
+  const sides=[ {s:11,e:13,h:23,k:25,a:27}, {s:12,e:14,h:24,k:26,a:28} ].map(o=>{
+    const pts={s:P(o.s),e:P(o.e),h:P(o.h),k:P(o.k),a:P(o.a)};
+    return {pts, score:pts.s.v+pts.h.v+pts.e.v+Math.max(pts.a.v,pts.k.v)};
+  }).sort((x,y)=>y.score-x.score);
+  const {s,e,h,k,a}=sides[0].pts;
+  const foot = a.v>0.4 ? a : k;  // 발목 안 보이면 무릎
+  if (s.v<0.5 || h.v<0.5 || foot.v<0.4) return {ok:false, why:"몸 전체가 보이게"};
+  const len=Math.hypot(foot.x-s.x, foot.y-s.y);
+  if (len < W*0.25) return {ok:false, why:"조금 더 멀리"};
+  const tilt=Math.atan2(Math.abs(foot.y-s.y), Math.abs(foot.x-s.x))*180/Math.PI;
+  if (tilt>35) return {ok:false, why:"엎드려 주세요"};
+  const hip=ang(s.x,s.y,h.x,h.y,foot.x,foot.y);
+  if (hip<150) return {ok:false, why: (h.y < (s.y+foot.y)/2 ? "엉덩이 내리기" : "엉덩이 올리기")};
+  // 팔로 몸을 받치고 있는지 (팔꿈치가 어깨 아래)
+  if (e.v>0.4 && (e.y - s.y) < len*0.12) return {ok:false, why:"팔로 받쳐 주세요"};
+  return {ok:true, why:"좋아요"};
+}
+
+function draw(lm, ok){
+  canvas.width=video.videoWidth; canvas.height=video.videoHeight;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  if(!lm) return;
+  const W=canvas.width,H=canvas.height;
+  const links=[[11,13],[13,15],[12,14],[14,16],[11,12],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28]];
+  ctx.lineWidth=Math.max(3,W/200); ctx.strokeStyle=ok?"#5fc39f":"#e9c46a"; ctx.fillStyle=ctx.strokeStyle;
+  links.forEach(([i,j])=>{ if((lm[i].visibility??1)<.4||(lm[j].visibility??1)<.4) return;
+    ctx.beginPath(); ctx.moveTo(lm[i].x*W,lm[i].y*H); ctx.lineTo(lm[j].x*W,lm[j].y*H); ctx.stroke(); });
+  [11,12,13,14,23,24,25,26,27,28].forEach(i=>{ if((lm[i].visibility??1)<.4) return; ctx.beginPath(); ctx.arc(lm[i].x*W,lm[i].y*H,ctx.lineWidth*1.6,0,7); ctx.fill(); });
+}
+
+function setBadge(cls,txt){ const b=$("badge"); b.className="badge "+cls; b.textContent=txt; }
+
+function loop(){
+  requestAnimationFrame(loop);
+  if(!landmarker || video.readyState<2 || video.currentTime===lastVT) return;
+  lastVT=video.currentTime;
+  let res; try{ res=landmarker.detectForVideo(video, performance.now()); }catch(e){ return; }
+  const lm=res.landmarks && res.landmarks[0];
+  const j = lm ? judge(lm) : {ok:false, why:"사람이 안 보여요"};
+  draw(lm, j.ok);
+  const now=Date.now();
+
+  if(running){
+    if(j.ok){ badSince=0; setBadge("ok","플랭크 중 · "+j.why); }
+    else{
+      if(!badSince) badSince=now;
+      setBadge("bad","자세 무너짐 · "+j.why);
+      if(auto && (now-badSince)/1000>=BREAK_TO_STOP) stopSet(badSince);
+    }
+    $("hold").style.width="0";
+    return;
+  }
+  if(!auto){ setBadge(j.ok?"ok":"wait", j.ok?"자세 좋아요 (수동 모드)":j.why); return; }
+  if(now-lastStop < COOLDOWN*1000){ okSince=0; setBadge("wait","휴식 중…"); $("hold").style.width="0"; return; }
+  if(j.ok){
+    if(!okSince) okSince=now;
+    const p=(now-okSince)/1000/HOLD_TO_START;
+    $("hold").style.width=Math.min(100,p*100)+"%";
+    setBadge("wait","자세 확인 중…");
+    if(p>=1){ $("hold").style.width="0"; startSet(okSince); }
+  } else { okSince=0; $("hold").style.width="0"; setBadge("wait",j.why); }
+}
+
+/* ---------------- Firebase (선택) ---------------- */
+if (FIREBASE_CONFIG) (async()=>{
+  try{
+    const V="10.12.2", base=`https://www.gstatic.com/firebasejs/${V}/`;
+    const {initializeApp}=await import(base+"firebase-app.js");
+    const A=await import(base+"firebase-auth.js");
+    const F=await import(base+"firebase-firestore.js");
+    const app=initializeApp(FIREBASE_CONFIG), auth=A.getAuth(app), fdb=F.getFirestore(app);
+    $("cloudTxt").textContent="☁️ 로그인하면 클라우드에 저장돼요";
+    $("loginBtn").hidden=false;
+    $("loginBtn").onclick=async()=>{
+      if(auth.currentUser){ await A.signOut(auth); return; }
+      try{ await A.signInWithPopup(auth,new A.GoogleAuthProvider()); }catch(e){ toast("로그인 실패: "+(e.code||"")); }
+    };
+    let unsub=null;
+    A.onAuthStateChanged(auth, async u=>{
+      if(unsub){ unsub(); unsub=null; }
+      if(!u){ cloud=null; records=store.get("plankLocal",[]); render(); $("cloudTxt").textContent="☁️ 로그인하면 클라우드에 저장돼요"; $("loginBtn").textContent="Google 로그인"; return; }
+      const col=F.collection(fdb,"users",u.uid,"sets");
+      cloud={ add:r=>F.addDoc(col,r), remove:id=>F.deleteDoc(F.doc(col,id)) };
+      // 로그인 전 기기에 쌓인 기록 올리기
+      const local=store.get("plankLocal",[]);
+      if(local.length){ try{ for(const r of local){ const {_id,...d}=r; await F.addDoc(col,d); } store.set("plankLocal",[]); toast(local.length+"개 기록을 클라우드로 옮겼어요"); }catch(e){} }
+      $("cloudTxt").textContent="☁️ "+(u.email||"클라우드")+"에 저장 중"; $("loginBtn").textContent="로그아웃";
+      unsub=F.onSnapshot(F.query(col,F.orderBy("ts","desc"),F.limit(1000)), snap=>{
+        records=snap.docs.map(d=>({...d.data(),_id:d.id})); render();
+      }, err=>{ $("cloudTxt").textContent="클라우드 오류: "+err.code; });
+    });
+  }catch(e){ $("cloudTxt").textContent="클라우드 연결 실패 · 기기에 저장"; }
+})();
+</script>
+</body>
+</html>
